@@ -13,6 +13,11 @@ bot.start(async ctx => {
     await ctx.reply('Привет, напиши мне что угодно, а я отвечу!');
 });
 
+bot.command('clear', async ctx => {
+    modelContexts.find(el => el.userId == ctx.from.id).messages = [];
+    await ctx.reply('Контекст диалога очищен!');
+});
+
 bot.on(message('text'), async ctx => {
     console.log(ctx.from.id, ctx.message.text);
     let msg = await ctx.reply('Генерирую ответ...');
