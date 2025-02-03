@@ -2,6 +2,7 @@ require('dotenv').config();
 const ollama = require('ollama').default;
 const { Telegraf } = require('telegraf');
 const { message } = require('telegraf/filters');
+const translate = require('translate-google');
 
 const token = process.env.TOKEN;
 const model = process.env.MODEL;
@@ -14,14 +15,29 @@ bot.start(async ctx => {
 });
 
 bot.command('clear', async ctx => {
-    modelContexts.find(el => el.userId == ctx.from.id).messages = [];
+    ctx.modelContexts.find(el => el.userId == ctx.from.id).messages = [];
     await ctx.reply('Контекст диалога очищен!');
 });
 
-bot.on(message('text'), async ctx => {
+bot.use(async (ctx, next) => {
     try{
         let msg = await ctx.reply('Генерирую ответ...');
-        let modelContext;
+        let modelContext, text = ctx.message.text, translatedText = '', images = [];
+
+        if(ctx.has(message('photo'))){
+            console.log('Has photo!');
+
+            const { file_id } = ctx.message.photo.pop();    
+            const link = await bot.telegram.getFileLink(file_id);
+
+            await fetch(link.toString())
+                .then(res => res.bytes())
+                .then(res => images.push(res));
+
+            text = ctx.message.caption;
+        }
+
+        translatedText = await translate(text, { from : 'ru', to : 'en' });
 
         if((modelContext = modelContexts.find(el => el.userId == ctx.from.id)) == undefined){
             modelContext = {
@@ -31,51 +47,23 @@ bot.on(message('text'), async ctx => {
             modelContexts.push(modelContext);
         }
 
-        modelContext.messages.push({ role : 'user', content : ctx.message.text });
+        console.log(`Text: ${text}\nTranslated text: ${translatedText}`);
+
+        ctx.modelContext = modelContext;
+
+        ctx.modelContext.messages.push({ role : 'user', content : translatedText, images : images || undefined });
         const response = await ollama.chat({
             model,
-            messages : modelContext.messages
+            messages : ctx.modelContext.messages
         });
+        console.log(ctx.modelContext);
+        let modelAnswer = (await translate(response.message.content, { from : 'en', to : 'ru' })).replace(/([\.\!\?])/ig, (substring) => substring + " ");
 
-        modelContext.messages.push({ role : 'assistant', content : response.message.content });
-        console.log(response.message.content);
-        await bot.telegram.editMessageText(msg.chat.id, msg.message_id, undefined, response.message.content);
-    }catch(e){
-        console.error(e);
-        await ctx.reply('Произошла ошибка. Попробуйте снова.');
-    }
-});
+        ctx.modelContext.messages.push({ role : 'assistant', content : modelAnswer });
+        console.log(`Model Answer: ${modelAnswer}`);
+        await bot.telegram.editMessageText(msg.chat.id, msg.message_id, undefined, modelAnswer);
 
-bot.on(message('photo'), async ctx => {
-    try{
-        const { file_id } = ctx.message.photo.pop();
-        let photo;
-    
-        const link = await bot.telegram.getFileLink(file_id);
-        await fetch(link.toString())
-            .then(res => res.bytes())
-            .then(res => photo = res);
-    
-        let msg = await ctx.reply('Генерирую ответ...');
-        let modelContext;
-    
-        if((modelContext = modelContexts.find(el => el.userId == ctx.from.id)) == undefined){
-            modelContext = {
-                userId : ctx.from.id,
-                messages : []
-            };
-            modelContexts.push(modelContext);
-        }
-    
-        modelContext.messages.push({ role : 'user', content : ctx.message.caption, images : [photo] });
-        const response = await ollama.chat({
-            model,
-            messages : modelContext.messages
-        });
-    
-        modelContext.messages.push({ role : 'assistant', content : response.message.content });
-        console.log(response.message.content);
-        await bot.telegram.editMessageText(msg.chat.id, msg.message_id, undefined, response.message.content);
+        await next();
     }catch(e){
         console.error(e);
         await ctx.reply('Произошла ошибка. Попробуйте снова.');
